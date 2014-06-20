@@ -16,6 +16,7 @@
 	((begin? exp)
 	 (eval-sequence (begin-actions exp) env))
 	((cond? exp) (eval (cond->if exp) env))
+    ((let? exp) (eval (let->combination exp env) env))
 	((application? exp)
 	 (apply (eval (operator exp) env)
 		(list-of-values (operands exp) env)))
@@ -185,6 +186,22 @@
                      (sequence->exp (cond-actions first))
                      (expand-clauses rest))))))
 
+
+(define (let? exp) (tagged-list? exp 'let))
+(define (let-bindings exp) (cadr exp))
+(define (let-vars bindings) (map car bindings))
+(define (let-exps bindings) (map cadr bindings))
+(define (let-body exp) (caddr exp))
+
+(define (let->combination exp env)
+    (let ((vars (let-vars (let-bindings exp)))
+          (exps (let-exps (let-bindings exp)))
+          (body (let-body exp)))
+         (if (not (= (length vars) (length exps)))
+             (error "Ill-formed special form LET")
+             (cons (list 'lambda vars body) exps))))
+             
+
 ;; testing of predicates
 (define (true? x)
   (not (eq? x false)))
@@ -285,6 +302,7 @@
           (list '- -)
           (list '* *)
           (list '= =)
+          (list 'list list)
           (list 'eq? eq?)
           (list 'null? null?)))
 
