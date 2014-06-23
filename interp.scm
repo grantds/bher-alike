@@ -8,24 +8,17 @@
   (cond ((self-evaluating? exp) (analyze-self-evaluating  exp))
         ((variable? exp) (analyze-variable exp))
         ((quoted? exp) (analyze-quoted exp))
-        ((assignment? exp) (analyze-assignment exp))
+          ; No Mutation ((assignment? exp) (analyze-assignment exp))
         ((definition? exp) (analyze-definition exp))
         ((and? exp) (analyze-and exp))
         ((or? exp) (analyze-or exp))
         ((if? exp) (analyze-if exp))
         ((lambda? exp) (analyze-lambda exp))
-       ;  (make-procedure (lambda-parameters exp)
-       ;         (lambda-body exp)
-       ;         env))
         ((begin? exp) (analyze-sequence (begin-actions exp)))
-       ; (eval-sequence (begin-actions exp) env))
         ((cond? exp) (analyze (cond->if exp)))
         ((let? exp) (analyze (let->combination exp)))
         ((application? exp) (analyze-application exp))
-          ;  (apply (eval (operator exp) env)
-          ; (list-of-values (operands exp) env)))
-	(else
-	 (error "Unknown expression type -- ANALYZE" exp))))
+	(else (error "Unknown expression type -- ANALYZE" exp))))
 
 (define (apply procedure arguments)
   (cond ((primitive-procedure? procedure)
@@ -138,7 +131,7 @@
 
 (define (lambda? exp) (tagged-list? exp 'lambda))
 (define (lambda-parameters exp) (cadr exp))
-(define (lambda-body exp) (cddr exp))
+(define (lambda-body exp) (caddr exp))
 
 (define (analyze-lambda exp)
   (let ((vars (lambda-parameters exp))
@@ -370,14 +363,22 @@
 	    (else (scan (cdr vars) (cdr vals)))))
     (scan (frame-variables frame)
 	  (frame-values frame))))
-		     
+
+
+
+(define (setup-environment)
+  (let ((initial-env
+	 (extend-environment (primitive-procedure-names)
+			     (primitive-procedure-objects)
+			     the-empty-environment)))
+    (define-variable! 'true true initial-env)
+    (define-variable! 'false false initial-env)
+    initial-env))
 
 (define (primitive-procedure? proc)
   (tagged-list? proc 'primitive))
 
-
 (define (primitive-implementation proc) (cadr proc))
-
 
 (define primitive-procedures
     (list (list 'car car)
@@ -395,26 +396,9 @@
 (define (primitive-procedure-names)
   (map car primitive-procedures))
 
-
 (define (primitive-procedure-objects)
   (map (lambda (proc) (list 'primitive (cadr proc)))
        primitive-procedures))
-
-
-(define (setup-environment)
-  (let ((initial-env
-	 (extend-environment (primitive-procedure-names)
-			     (primitive-procedure-objects)
-			     the-empty-environment)))
-    (define-variable! 'true true initial-env)
-    (define-variable! '#t true initial-env)
-    (define-variable! 'false false initial-env)
-    (define-variable! '#f false initial-env)
-    initial-env))
-
-
-(define the-global-environment (setup-environment))
-
 
 (define (apply-primitive-procedure proc args)
   (apply-in-underlying-scheme
@@ -445,3 +429,119 @@
       (display object)))
 
 
+;;
+;; This marks the end of the scheme interpreter as described in SICP
+;; What follows is the transformation described in 
+;;  "lightweight implementations of probabilistic programming languages..."
+;; 
+;; By "address" we mean a list of unique function-identifying symbols that
+;; is constructed at runtime. 
+
+
+;; define a syntactic transformation on expressions such that 
+;;   1) each function definition takes another argument, addr
+;;   2) change each function application such that
+;;        * the current address is extended with a symbol that uniquely 
+;;          identifies the application within the program
+;;        * we pass on the modified address as an argument when the
+;;          function is applied
+
+
+;; primitive procedures need to be redefined to take (and ignore) the address
+
+(define primitive-procedures
+    (list (list 'car car)
+          (list 'cdr cdr)
+          (list 'cons cons)
+          (list '+ +)
+          (list '- -)
+          (list '* *)
+          (list '= =)
+          (list 'list list)
+          (list 'eq? eq?)
+          (list 'null? null?)))
+
+
+
+;; generates a unique symbol (convert to and from string to simplify)
+(define (gen-addr) 
+  (string->symbol (symbol->string (generate-uninterned-symbol "a"))))
+
+(define (transform-top exp) 
+  (generate-uninterned-symbol 0)
+  (list (append
+	   '(lambda (addr))
+	   (list (transform exp)))
+	'(top)))
+	
+		
+(define (transform exp) 
+  (cond ((lambda? exp) (transform-lambda exp))
+	((begin? exp) (transform-begin exp))
+	((let? exp) (transform-let exp))
+	((if? exp) (transform-if exp))
+	((and? exp) (transform-and exp))
+	((or? exp) (transform-or exp))
+	((definition? exp) (transform-definition exp))
+	((quoted? exp) exp)
+	((application? exp) (transform-application exp))
+	((cond? exp) (transform (cond->if exp)))
+	;; if no match, treat as primitive
+	(else exp)))
+
+(define (transform-lambda exp)
+  (display "transform-lambda ")
+  (let ((args (lambda-parameters exp))
+	(body (lambda-body exp)))
+    (display body)
+    (list 'lambda (cons 'addr args) (transform body))))
+
+(define (transform-begin exp)
+  (display "transform-begin ")
+ (cons 'begin (map transform (begin-actions exp))))
+
+(define (transform-let exp) 
+  (display "transform-let ")
+  (let* ((bindings (let-bindings exp))
+	(body (let-body exp))
+	(new-bindings (map
+		       (lambda (x) (list (car x) (transform (cadr x))))
+		       bindings))
+	(new-body (transform body)))
+    (list 'let new-bindings new-body)))
+
+
+
+(define (transform-if exp)
+  (display "transform-if ")
+  (cons 'if (map transform (cdr exp))))
+
+(define (transform-and exp)
+  (display "transform-and ")
+  (cons 'and (map transform (cdr exp))))
+
+(define (transform-or exp) 
+  (display "transform-or ")
+  (cons 'or (map transform (cdr exp))))
+
+(define (transform-definition exp) 
+  (display "transform-definition ")
+  (let ((texp (transform (definition-value exp))))
+    (list 'define (definition-variable exp) texp)))
+
+(define (transform-application exp) 
+  (display "transform-app ")
+  (let* ((S (gen-addr))
+	 (op (operator exp))
+	 (args (operands exp))
+	 (top (transform op))
+	 (targs (map transform args)))
+    (append (list (transform op) (list 'cons S 'addr)) targs)))
+
+(define (transform-loop)
+ (prompt-for-input input-prompt)
+ (let ((input (read)))
+   (let ((output (transform-top input)))
+     (announce-output output-prompt)
+     (user-print output)))
+ (transform-loop))
