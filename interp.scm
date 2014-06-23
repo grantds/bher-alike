@@ -131,7 +131,7 @@
 
 (define (lambda? exp) (tagged-list? exp 'lambda))
 (define (lambda-parameters exp) (cadr exp))
-(define (lambda-body exp) (caddr exp))
+(define (lambda-body exp) (cddr exp))
 
 (define (analyze-lambda exp)
   (let ((vars (lambda-parameters exp))
@@ -220,8 +220,10 @@
 (define (rest-operands ops) (cdr ops))
 
 (define (analyze-application exp)
+  (display "FOO")
   (let ((fproc (analyze (operator exp)))
 	(aprocs (map analyze (operands exp))))
+    (display "Hi")
     (lambda (env)
       (execute-application (fproc env)
 			   (map (lambda (aproc) (aproc env))
@@ -467,16 +469,17 @@
 (define (gen-addr) 
   (string->symbol (symbol->string (generate-uninterned-symbol "a"))))
 
-(define (transform-top exp) 
+(define (transform-top exp env) 
   (generate-uninterned-symbol 0)
   (list (append
 	   '(lambda (addr))
-	   (list (transform exp)))
-	'(top)))
+	   (list (transform exp env)))
+	''(top)))
 	
 		
-(define (transform exp) 
+(define (transform exp env) 
   (cond ((lambda? exp) (transform-lambda exp))
+	((variable? exp) (transform-var exp env))
 	((begin? exp) (transform-begin exp))
 	((let? exp) (transform-let exp))
 	((if? exp) (transform-if exp))
@@ -486,7 +489,6 @@
 	((quoted? exp) exp)
 	((application? exp) (transform-application exp))
 	((cond? exp) (transform (cond->if exp)))
-	;; if no match, treat as primitive
 	(else exp)))
 
 (define (transform-lambda exp)
@@ -536,7 +538,23 @@
 	 (args (operands exp))
 	 (top (transform op))
 	 (targs (map transform args)))
-    (append (list (transform op) (list 'cons S 'addr)) targs)))
+    (append (list (transform op) (list 'cons `',S 'addr)) targs)))
+
+(define (transform-primitive proc)
+  (display "primitive")
+  (let ((impl (primitive-implementation proc))
+        (new-impl (lambda (x) (apply impl (cdr x))))) 
+    (list 'primitive new-impl)))
+  
+(define (drivert-loop)
+  (prompt-for-input input-prompt)
+  (let ((input (read)))
+    (let ((output (eval (transform-top input) the-global-environment)))
+      (announce-output output-prompt)
+      (user-print output)))
+  (drivert-loop))
+	
+  
 
 (define (transform-loop)
  (prompt-for-input input-prompt)
