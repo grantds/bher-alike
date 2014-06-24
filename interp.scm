@@ -1,3 +1,35 @@
+;; database of random choices
+;; implemented as a hashtable from lists of symbols to rndm structures
+;;
+;; defines a mapping N -> T * X * L * 0, where
+;;    N : name of random choice (a list of symbols)
+;;    X : the value
+;;    T : the ERP type
+;;    0 : the ERP parameters
+;;    L : likelihood
+
+(define-structure rndm type val params ll)
+
+(define table (make-equal-hash-table))
+
+;; wrapping for random number library
+;; todo: modify this to lookup in hashtable
+
+;; erp flip : 'flip
+;; parameterized on p: returns true with probability p
+(define (flip addr p)
+  (hash-table/lookup table addr
+     (lambda (val)
+     (lambda () 
+      
+
+(define (flip-prim p)
+  (if (> p (flo:random-unit (make-random-state true)))
+      true
+      false))
+
+
+
 (define apply-in-underlying-scheme apply)
 
 
@@ -220,10 +252,8 @@
 (define (rest-operands ops) (cdr ops))
 
 (define (analyze-application exp)
-  (display "FOO")
   (let ((fproc (analyze (operator exp)))
 	(aprocs (map analyze (operands exp))))
-    (display "Hi")
     (lambda (env)
       (execute-application (fproc env)
 			   (map (lambda (aproc) (aproc env))
@@ -382,29 +412,33 @@
 
 (define (primitive-implementation proc) (cadr proc))
 
+;; modify (most) primitives to take and ignore an address variable
 (define primitive-procedures
-    (list (list 'car car)
-          (list 'cdr cdr)
-          (list 'cons cons)
-          (list '+ +)
-          (list '- -)
-          (list '* *)
-          (list '= =)
-          (list 'list list)
-          (list 'eq? eq?)
-          (list 'null? null?)))
+    (list (list 'flip flip)
+          (list 'cons cons) 
+          (list 'cons3 (lambda (addr . args) (apply-in-underlying-scheme cons args)))
+          (list 'car (lambda (addr . args) (apply-in-underlying-scheme car args)))
+          (list 'cdr (lambda (addr . args) (apply-in-underlying-scheme cdr args)))
+          (list '+  (lambda (addr . args) (apply-in-underlying-scheme + args)))
+          (list '-  (lambda (addr . args) (apply-in-underlying-scheme - args)))
+          (list '*  (lambda (addr . args) (apply-in-underlying-scheme * args)))
+          (list '=  (lambda (addr . args) (apply-in-underlying-scheme = args)))
+          (list 'list  (lambda (addr . args) (apply-in-underlying-scheme list args)))
+          (list 'eq? (lambda (addr . args) (apply-in-underlying-scheme eq? args)))
+          (list 'null? (lambda (addr . args) (apply-in-underlying-scheme null? args)))))
+
 
 
 (define (primitive-procedure-names)
   (map car primitive-procedures))
 
 (define (primitive-procedure-objects)
-  (map (lambda (proc) (list 'primitive (cadr proc)))
-       primitive-procedures))
+ (map (lambda (proc) (list 'primitive (cadr proc)))
+      primitive-procedures))
+
 
 (define (apply-primitive-procedure proc args)
-  (apply-in-underlying-scheme
-   (primitive-implementation proc) args))
+      (apply-in-underlying-scheme (primitive-implementation proc) args))
 
 ;; need a REPL here
 (define input-prompt ";;; M-Eval input:")
@@ -449,37 +483,21 @@
 ;;          function is applied
 
 
-;; primitive procedures need to be redefined to take (and ignore) the address
-
-(define primitive-procedures
-    (list (list 'car car)
-          (list 'cdr cdr)
-          (list 'cons cons)
-          (list '+ +)
-          (list '- -)
-          (list '* *)
-          (list '= =)
-          (list 'list list)
-          (list 'eq? eq?)
-          (list 'null? null?)))
-
-
 
 ;; generates a unique symbol (convert to and from string to simplify)
 (define (gen-addr) 
   (string->symbol (symbol->string (generate-uninterned-symbol "a"))))
 
-(define (transform-top exp env) 
+(define (transform-top exp) 
   (generate-uninterned-symbol 0)
   (list (append
 	   '(lambda (addr))
-	   (list (transform exp env)))
+	   (list (transform exp)))
 	''(top)))
 	
 		
-(define (transform exp env) 
+(define (transform exp) 
   (cond ((lambda? exp) (transform-lambda exp))
-	((variable? exp) (transform-var exp env))
 	((begin? exp) (transform-begin exp))
 	((let? exp) (transform-let exp))
 	((if? exp) (transform-if exp))
@@ -489,7 +507,11 @@
 	((quoted? exp) exp)
 	((application? exp) (transform-application exp))
 	((cond? exp) (transform (cond->if exp)))
+	((cons? exp) 'cons3)
 	(else exp)))
+
+;; we mangle cons because cons is in the transformed output as well
+(define (cons? exp) (eq? 'cons exp))
 
 (define (transform-lambda exp)
   (display "transform-lambda ")
@@ -563,3 +585,4 @@
      (announce-output output-prompt)
      (user-print output)))
  (transform-loop))
+
