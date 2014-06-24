@@ -1,3 +1,5 @@
+(define apply-in-underlying-scheme apply)
+
 ;; database of random choices
 ;; implemented as a hashtable from lists of symbols to rndm structures
 ;;
@@ -8,29 +10,85 @@
 ;;    0 : the ERP parameters
 ;;    L : likelihood
 
-(define-structure rndm type val params ll)
 
-(define table (make-equal-hash-table))
+;; table mapping names to types, values, params, and likelihood
+(define rnd-table (make-equal-hash-table))
+;; rnd is a structure containing random data 
+(define-structure rnd type val params ll)
 
-;; wrapping for random number library
-;; todo: modify this to lookup in hashtable
 
-;; erp flip : 'flip
+
+;;;;; implementations of random primitives go here ;;;;
+
 ;; parameterized on p: returns true with probability p
-(define (flip addr p)
-  (hash-table/lookup table addr
-     (lambda (val)
-     (lambda () 
-      
-
 (define (flip-prim p)
   (if (> p (flo:random-unit (make-random-state true)))
       true
       false))
 
+;; log-likelihood for flip
+(define (flip-ll x p)
+  (let ((k (if x 1 0)))
+    (log (* (expt p k) (expt (- 1 p) (- 1 k))))))
+
+;; table maping erp types to underyling function
+;; at the moment, you need to declare the erp name as a primitive procedure,
+;; corresponding to a function that calls lookup-erp-value on the
+;; appropriate type with some other function actually implementing the erp 
+;; and register the implementation in erp-table
+;; TODO: make this all more dynamic
+(define erp-table (make-strong-eq-hash-table))
+;; erp is a structure containing the erp implementation and likelihood
+(define-structure erp sample ll)
+(hash-table/put! erp-table 'flip (make-erp flip-prim flip-ll))
+
+;; sample from P_type(*|params)
+(define (get-sample type params)
+  (let ((erpf (erp-sample (hash-table/get erp-table type 'nil))))
+    (apply-in-underlying-scheme erpf params)))
+
+;; compute the likelihood P_type(val|params)
+(define (get-ll type val params)
+  (let ((erpl (erp-ll (hash-table/get erp-table type 'nil))))
+    (apply-in-underlying-scheme erpl (cons val params))))
+
+;; display the current type, value, parameters, likelihood
+;; of the random choice associated with addr
+(define (display-rnd-addr addr)
+  (let ((rnd (hash-table/get rnd-table addr 'nil)))
+    (if (eq? rnd 'nil)
+	(display "No value associated with address.\n")
+	(begin (display addr)
+	       (display ": ") (display (rnd-type rnd))
+	       (display "  val:") (display (rnd-val rnd))
+	       (display "  param:") (display (rnd-params rnd))
+	       (display "  ll:") (display (rnd-ll rnd))
+	       (display "\n")
+	       rnd))))
+    
+(define (lookup-erp-value addr type . params)
+ (let ((rnd (hash-table/get rnd-table addr 'nil)))
+    (if (and (not (eq? rnd 'nil)) (eq? type (rnd-type rnd)))
+	(let ((val (rnd-val rnd)))
+	  (if (equal? params (rnd-params rnd))
+	      val; TODO: update likelihood
+	      ; else parameters do not match
+	      (let* ((l (get-ll type val params))
+		    (new-rnd (make-rnd type val params l)))
+		(begin (hash-table/put! rnd-table addr new-rnd) 
+		       val)))); TODO: update likelihood
+	; not found in database, need to sample
+	(let* ((val (get-sample type params))
+	       (l (get-ll type val params)))
+	  (begin (hash-table/put! rnd-table addr (make-rnd type val params l))
+		 val))))) ; TODO: update likelihood
+
+;; erp flip : 'flip
+(define (flip addr p) (lookup-erp-value addr 'flip p))
+
+  
 
 
-(define apply-in-underlying-scheme apply)
 
 
 (define (eval exp env)
@@ -52,7 +110,7 @@
         ((application? exp) (analyze-application exp))
 	(else (error "Unknown expression type -- ANALYZE" exp))))
 
-(define (apply procedure arguments)
+(define (apply-interp procedure arguments)
   (cond ((primitive-procedure? procedure)
 	 (apply-primitive-procedure procedure arguments))
 	((compound-procedure? procedure)
@@ -565,7 +623,7 @@
 (define (transform-primitive proc)
   (display "primitive")
   (let ((impl (primitive-implementation proc))
-        (new-impl (lambda (x) (apply impl (cdr x))))) 
+        (new-impl (lambda (x) (apply-interp impl (cdr x))))) 
     (list 'primitive new-impl)))
   
 (define (drivert-loop)
