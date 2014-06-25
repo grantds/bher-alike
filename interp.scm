@@ -600,22 +600,19 @@
 	((quoted? exp) exp)
 	((application? exp) (transform-application exp))
 	((cond? exp) (transform (cond->if exp)))
+	((variable? exp) (symbol-append 'church- exp))
 	(else exp)))
 
 
 (define (transform-lambda exp)
-  (display "transform-lambda ")
   (let ((args (lambda-parameters exp))
 	(body (lambda-body exp)))
-    (display body)
-    (list 'lambda (cons 'addr args) (transform body))))
+    `(lambda ,(cons 'addr (map transform args)) ,@(map transform body))))
 
 (define (transform-begin exp)
-  (display "transform-begin ")
  (cons 'begin (map transform (begin-actions exp))))
 
 (define (transform-let exp) 
-  (display "transform-let ")
   (let* ((bindings (let-bindings exp))
 	(body (let-body exp))
 	(new-bindings (map
@@ -627,34 +624,28 @@
 
 
 (define (transform-if exp)
-  (display "transform-if ")
   (cons 'if (map transform (cdr exp))))
 
 (define (transform-and exp)
-  (display "transform-and ")
   (cons 'and (map transform (cdr exp))))
 
 (define (transform-or exp) 
-  (display "transform-or ")
   (cons 'or (map transform (cdr exp))))
 
 (define (transform-definition exp) 
-  (display "transform-definition ")
-  (let ((texp (transform (definition-value exp))))
-    (list 'define (definition-variable exp) texp)))
+  (let ((texp (transform (definition-value exp)))
+	(var (transform (definition-variable exp))))
+    (list 'define var texp)))
 
 (define (transform-application exp) 
-  (display "transform-app ")
-  (display (operator exp))
   (let* ((S (gen-addr))
 	 (op (operator exp))
 	 (args (operands exp))
-	 (top (symbol-append 'church- (transform op)))
+	 (top (transform op))
 	 (targs (map transform args)))
     (append (list top (list 'cons `',S 'addr)) targs)))
 
 (define (transform-primitive proc)
-  (display "primitive")
   (let ((impl (primitive-implementation proc))
         (new-impl (lambda (x) (apply-interp impl (cdr x))))) 
     (list 'primitive new-impl)))
