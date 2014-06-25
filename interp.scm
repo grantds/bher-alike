@@ -616,7 +616,7 @@
   (let* ((bindings (let-bindings exp))
 	(body (let-body exp))
 	(new-bindings (map
-		       (lambda (x) (list (car x) (transform (cadr x))))
+		       (lambda (x) (list (transform (car x)) (transform (cadr x))))
 		       bindings))
 	(new-body (transform body)))
     (list 'let new-bindings new-body)))
