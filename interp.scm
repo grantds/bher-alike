@@ -1,70 +1,23 @@
+
 ;; global variables used for tracking log-probabilities
 (define likelihood 0)
 (define likelihood-fresh 0)
 (define likelihood-stale 0)
-(define active-list ()) ; random choices that were active in the last update
+(define current-trace 0) ; use to mark "active" random choices in the databae
 
 (define apply-in-underlying-scheme apply)
 
-;; database of random choices
-;; implemented as a hashtable from lists of symbols to rndm structures
-;;
-;; defines a mapping N -> T * X * L * 0, where
-;;    N : name of random choice (a list of symbols)
-;;    X : the value
-;;    T : the ERP type
-;;    0 : the ERP parameters
-;;    L : likelihood
+(define (summarize-rnd) (begin 
+    (display "\n")
+    (hash-table/for-each rnd-table (lambda (addr rnd)
+	   (display-rnd-addr addr))) 
+    (display "ll: ") (display likelihood)
+    (display "\nll-fresh: ") (display likelihood-fresh)
+    (display "\nll-stale:") (display likelihood-stale) (list)))
 
-
-;; table mapping names to types, values, params, and likelihood
-(define rnd-table (make-equal-hash-table))
-;; rnd is a structure containing random data 
-(define-structure rnd type val params ll)
-
-
-
-;;;;; implementations of random primitives go here ;;;;
-
-
-;; erp flip : 'flip
-(define (church-flip addr p) (lookup-erp-value addr 'flip p))
-
-
-;; parameterized on p: returns true with probability p
-(define (flip p)
-  (if (> p (flo:random-unit (make-random-state true)))
-      true
-      false))
-
-;; log-likelihood for flip
-(define (flip-ll x p)
-  (let ((k (if x 1 0)))
-    (log (* (expt p k) (expt (- 1 p) (- 1 k))))))
-
-;; table maping erp types to underyling function
-;; at the moment, you need to declare the erp name as a primitive procedure,
-;; corresponding to a function that calls lookup-erp-value on the
-;; appropriate type with some other function actually implementing the erp 
-;; and register the implementation in erp-table
-;; TODO: make this all more dynamic
-(define erp-table (make-strong-eq-hash-table))
-;; erp is a structure containing the erp implementation and likelihood
-(define-structure erp sample ll)
-(hash-table/put! erp-table 'flip (make-erp flip flip-ll))
-
-;; sample from P_type(*|params)
-(define (get-sample type params)
-  (let ((erpf (erp-sample (hash-table/get erp-table type 'nil))))
-    (apply-in-underlying-scheme erpf params)))
-
-;; compute the likelihood P_type(val|params)
-(define (get-ll type val params)
-  (let ((erpl (erp-ll (hash-table/get erp-table type 'nil))))
-    (apply-in-underlying-scheme erpl (cons val params))))
 
 ;; display the current type, value, parameters, likelihood
-;; of the random choice associated with addr
+;; of the random choice associated with addr in the hash table
 (define (display-rnd-addr addr)
   (let ((rnd (hash-table/get rnd-table addr 'nil)))
     (if (eq? rnd 'nil)
@@ -77,25 +30,176 @@
 	       (display "\n")
 	       rnd))))
     
+
+
+;; MCMC (Metropolis-Hastings) implementation
+
+;; trace-update runs f, keeping track of likelihoods
+;;   f: (transformed) probabilistic program that takes no parameters
+;;   table: table mapping random choice names to values, likelihoods, etc
+(define (trace-update f table)
+  (set! current-trace (generate-uninterned-symbol "t"))
+  (set! likelihood 0)
+  (set! likelihood-fresh 0)
+  (set! likelihood-stale 0)
+
+  (eval f the-global-environment) ; likelihood and random choices are tracked
+  (hash-table/for-each table (lambda (addr rnd)
+     (if (eq? current-trace (rnd-mark rnd))
+	 (list)
+	 (let* ((x (rnd-val rnd))
+		(params (rnd-params rnd))
+		(type (rnd-type rnd))
+		(ll (get-ll type x params)))
+	   (set! likelihood-stale (+ likelihood-stale ll))
+	   (hash-table/remove! table addr)))))
+  table)
+
+(define (mh-loop iters)
+    (if (eq? iters 0)
+	(display "DONE")
+	(let* ((addrs (hash-table/key-list rnd-table))
+	       (r (random (length (addrs))))
+	       (name-r (list-ref addrs r)) ; random choice name
+	       (choice-r (hash-table/get erp-table name-r)) ; corresponding rnd 
+	       (type-db (erp-type choice-r))
+	       (val-db (erp-val choice-r)) 
+	       (params-db (erp-params choice-r))
+
+	       ; sample from proposal disribution
+	       (val-sample (get-kernel-sample type-db params-db)) 
+	       (F (get-kernel-prob type-db val-sample params-db))
+	       (R (get-kernel-prob type-db val-db params-db))
+	       (l (get-ll type-db val-sample params-db))
+
+	       (new-table (rnd-table-cpy rnd-table))
+	       (_ (hash_table/put! new-table name-r
+				   (make-rnd type-db val-sample l params-db)))
+	       (new-table (trace-update f new-table))
+	       (l- likelihood)
+	       (l-fresh likelihood-fresh)
+	       (l-stale likelihood-stale)
+	       (alpha .3)) ; TODO
+	  (if (< (log (flo:random-unit *random-state*)) alpha)
+	      (begin (set! rnd-table new-table) ; accept
+		     (set! likelihood l-))))))
+
+
+
+(define (mh-sample f iters)
+  (hash-table/clear! rnd-table)
+  (set! rnd-table (trace-update f rnd-table))
+  (mh-loop iters))
+  	  
+;; database of random choices
+;; implemented as a hashtable from lists of symbols to rndm structures
+;;
+;; defines a mapping N -> T * X * L * 0, where
+;;    N : name of random choice (a list of symbols)
+;;    X : the value
+;;    T : the ERP type
+;;    0 : the ERP parameters
+;;    L : likelihood
+
+
+;; table mapping names to types, values, params, and likelihood
+;; for now, a global variable. 
+(define rnd-table (make-equal-hash-table))
+;; rnd is a structure containing random data 
+(define-structure (rnd copier) type val params ll mark)
+
+;; returns deep copy of hash table and all structures in it
+(define (rnd-table-cpy table)
+  (let ((new-table (make-equal-hash-table)))
+    (hash-table/for-each table (lambda (addr rnd)
+	(hash-table/put! new-table addr (rnd-copy rnd)))) 
+    new-table))
+
+
+
+;;;;; implementations of random primitives go here ;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (bernoulli p) (if (flip p) 1 0))
+(define (bernoulli-ll x p)
+  (cond ((eq? x 1) (flip-ll true p)
+	 (eq? x 0) (flip-ll false p)
+	 (else (error "unsuppored value -- bernoulli-ll")))))
+(define (bernoulli-kernel-sample theta . state)
+  (apply-in-underlying-scheme bernoulli theta))
+(define (bernoulli-kernel-p x theta . state)
+  (bernoulli-ll x theta))
+(define (church-bernoulli addr p) (lookup-erp-value addr 'bernoulli p))
+
+
+(define (flip p) (< p (flo:random-unit *random-state*)))
+(define (flip-ll x p)
+  (let ((k (if x 1 0)))
+    (log (* (expt p k) (expt (- 1 p) (- 1 k))))))
+(define (flip-kernel-sample theta . state)
+  (apply-in-underlying-scheme flip theta))
+(define (flip-kernel-p x theta . state)
+  (flip-ll x theta))
+(define (church-flip addr p) (lookup-erp-value addr 'flip p))
+
+
+
+;; table maping erp types to underyling function
+;; at the moment, you need to declare the erp name as a primitive procedure,
+;; corresponding to a function that calls lookup-erp-value on the
+;; appropriate type with some other function actually implementing the erp 
+;; and register the implementation in erp-table
+;; TODO: make this all more dynamic
+(define erp-table (make-strong-eq-hash-table))
+;; erp is a structure containing the erp implementation and likelihood
+(define-structure erp sample ll kernel-sample kernel-p)
+(hash-table/put! erp-table 'flip (make-erp flip flip-ll
+					   flip-kernel-sample flip-kernel-p))
+(hash-table/put! erp-table 'bernoulli (make-erp bernoulli bernoulli-ll
+	    bernoulli-kernel-sample bernoulli-kernel-p))
+
+;; sample from P_type(*|params)
+(define (get-sample type params)
+  (let ((impl (erp-sample (hash-table/get erp-table type 'nil))))
+    (apply-in-underlying-scheme impl params)))
+
+;; compute the log-likelihood P_type(val|params)
+(define (get-ll type val params)
+  (let ((lkl (erp-ll (hash-table/get erp-table type 'nil))))
+    (apply-in-underlying-scheme lkl (cons val params))))
+
+;; sample from the proposal kernal 
+(define (get-kernel-sample type params . state)
+  (let ((kernel (erp-kernel-sample (hash-table/get erp-table type 'nil))))
+    (apply-in-underlying-scheme kernel params )))
+
+;; evaluate proposal probability
+(define (get-kernel-prob type val params . state)
+  (let ((kernel (erp-kernel-p (hash-table/get erp-table type 'nil))))
+    (apply-in-underlying-scheme kernel val params )))
+
 (define (lookup-erp-value addr type . params)
  (let ((rnd (hash-table/get rnd-table addr 'nil)))
-    (set! active-list (cons addr active-list)) ; record addr as active 
     (if (and (not (eq? rnd 'nil)) (eq? type (rnd-type rnd)))
 	(let ((val (rnd-val rnd)))
+	  (set-rnd-mark! rnd current-trace) ; mark choice as active
 	  (if (equal? params (rnd-params rnd))
 	      (begin (set! likelihood (+ likelihood (rnd-ll rnd)))
 		     val)
 	      ; else parameters do not match, rescore erp with new parameters
 	      (let* ((l (get-ll type val params))
-		    (new-rnd (make-rnd type val params l)))
-		(begin (hash-table/put! rnd-table addr new-rnd) 
-		       (set! likelihood (+ likelihood (rnd-ll rnd)))
-		       val))));
+		    (new-rnd (make-rnd type val params l current-trace)))
+		(hash-table/put! rnd-table addr new-rnd) 
+		(set! likelihood (+ likelihood l))
+		val)));
 	; not found in database, need to sample
 	(let* ((val (get-sample type params))
-	       (l (get-ll type val params)))
-	  (begin (hash-table/put! rnd-table addr (make-rnd type val params l))
-		 val))))) ; TODO: update likelihood
+	       (l (get-ll type val params))
+	       (new-rnd (make-rnd type val params l current-trace)))
+	  (hash-table/put! rnd-table addr new-rnd) 
+	  (set! likelihood (+ likelihood l))
+	  (set! likelihood-fresh (+ likelihood-fresh l))
+	  val)))) ; TODO: update likelihood
   
 
 
@@ -483,6 +587,7 @@
 ;; modify (most) primitives to take and ignore an address variable
 (define primitive-procedures
     (list (list 'flip flip)
+	  (list 'bernoulli bernoulli)
 	  (list 'cons cons)
 	  (list 'car car)
 	  (list 'cdr cdr)
@@ -499,6 +604,7 @@
 
 (define church-procedures
   (list (list 'church-flip church-flip)
+	(list 'church-bernoulli church-bernoulli)
 	(list 'church-cons (ignore-addr cons))
 	(list 'church-car (ignore-addr car))
 	(list 'church-cdr (ignore-addr cdr))
