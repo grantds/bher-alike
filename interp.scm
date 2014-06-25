@@ -1,3 +1,9 @@
+;; global variables used for tracking log-probabilities
+(define likelihood 0)
+(define likelihood-fresh 0)
+(define likelihood-stale 0)
+(define active-list ()) ; random choices that were active in the last update
+
 (define apply-in-underlying-scheme apply)
 
 ;; database of random choices
@@ -20,8 +26,13 @@
 
 ;;;;; implementations of random primitives go here ;;;;
 
+
+;; erp flip : 'flip
+(define (church-flip addr p) (lookup-erp-value addr 'flip p))
+
+
 ;; parameterized on p: returns true with probability p
-(define (flip-prim p)
+(define (flip p)
   (if (> p (flo:random-unit (make-random-state true)))
       true
       false))
@@ -40,7 +51,7 @@
 (define erp-table (make-strong-eq-hash-table))
 ;; erp is a structure containing the erp implementation and likelihood
 (define-structure erp sample ll)
-(hash-table/put! erp-table 'flip (make-erp flip-prim flip-ll))
+(hash-table/put! erp-table 'flip (make-erp flip flip-ll))
 
 ;; sample from P_type(*|params)
 (define (get-sample type params)
@@ -68,24 +79,23 @@
     
 (define (lookup-erp-value addr type . params)
  (let ((rnd (hash-table/get rnd-table addr 'nil)))
+    (set! active-list (cons addr active-list)) ; record addr as active 
     (if (and (not (eq? rnd 'nil)) (eq? type (rnd-type rnd)))
 	(let ((val (rnd-val rnd)))
 	  (if (equal? params (rnd-params rnd))
-	      val; TODO: update likelihood
-	      ; else parameters do not match
+	      (begin (set! likelihood (+ likelihood (rnd-ll rnd)))
+		     val)
+	      ; else parameters do not match, rescore erp with new parameters
 	      (let* ((l (get-ll type val params))
 		    (new-rnd (make-rnd type val params l)))
 		(begin (hash-table/put! rnd-table addr new-rnd) 
-		       val)))); TODO: update likelihood
+		       (set! likelihood (+ likelihood (rnd-ll rnd)))
+		       val))));
 	; not found in database, need to sample
 	(let* ((val (get-sample type params))
 	       (l (get-ll type val params)))
 	  (begin (hash-table/put! rnd-table addr (make-rnd type val params l))
 		 val))))) ; TODO: update likelihood
-
-;; erp flip : 'flip
-(define (flip addr p) (lookup-erp-value addr 'flip p))
-
   
 
 
@@ -473,17 +483,42 @@
 ;; modify (most) primitives to take and ignore an address variable
 (define primitive-procedures
     (list (list 'flip flip)
-          (list 'cons cons) 
-          (list 'cons3 (lambda (addr . args) (apply-in-underlying-scheme cons args)))
-          (list 'car (lambda (addr . args) (apply-in-underlying-scheme car args)))
-          (list 'cdr (lambda (addr . args) (apply-in-underlying-scheme cdr args)))
-          (list '+  (lambda (addr . args) (apply-in-underlying-scheme + args)))
-          (list '-  (lambda (addr . args) (apply-in-underlying-scheme - args)))
-          (list '*  (lambda (addr . args) (apply-in-underlying-scheme * args)))
-          (list '=  (lambda (addr . args) (apply-in-underlying-scheme = args)))
-          (list 'list  (lambda (addr . args) (apply-in-underlying-scheme list args)))
-          (list 'eq? (lambda (addr . args) (apply-in-underlying-scheme eq? args)))
-          (list 'null? (lambda (addr . args) (apply-in-underlying-scheme null? args)))))
+	  (list 'cons cons)
+	  (list 'car car)
+	  (list 'cdr cdr)
+	  (list '+ +)
+	  (list '- -)
+	  (list '* *)
+	  (list '= =)
+	  (list 'list list)
+	  (list 'eq? eq?)
+	  (list 'null? null?)))
+
+(define (ignore-addr prim)
+  (lambda (addr . args) (apply-in-underlying-scheme prim args)))
+
+(define church-procedures
+  (list (list 'church-flip church-flip)
+	(list 'church-cons (ignore-addr cons))
+	(list 'church-car (ignore-addr car))
+	(list 'church-cdr (ignore-addr cdr))
+	(list 'church-+ (ignore-addr +))
+	(list 'church-- (ignore-addr -))
+	(list 'church-* (ignore-addr *))
+	(list 'church-= (ignore-addr =))
+	(list 'church-list? (ignore-addr list?))
+	(list 'church-eq? (ignore-addr eq?))
+	(list 'church-null? (ignore-addr null?))))
+
+
+
+;(define church-procedures
+; (map (lambda (x) 
+; (list (symbol-append 'church- (car x)) (cadr x)))
+;      primitive-procedures))
+
+(set! primitive-procedures 
+      (append primitive-procedures church-procedures))
 
 
 
@@ -565,11 +600,8 @@
 	((quoted? exp) exp)
 	((application? exp) (transform-application exp))
 	((cond? exp) (transform (cond->if exp)))
-	((cons? exp) 'cons3)
 	(else exp)))
 
-;; we mangle cons because cons is in the transformed output as well
-(define (cons? exp) (eq? 'cons exp))
 
 (define (transform-lambda exp)
   (display "transform-lambda ")
@@ -613,12 +645,13 @@
 
 (define (transform-application exp) 
   (display "transform-app ")
+  (display (operator exp))
   (let* ((S (gen-addr))
 	 (op (operator exp))
 	 (args (operands exp))
-	 (top (transform op))
+	 (top (symbol-append 'church- (transform op)))
 	 (targs (map transform args)))
-    (append (list (transform op) (list 'cons `',S 'addr)) targs)))
+    (append (list top (list 'cons `',S 'addr)) targs)))
 
 (define (transform-primitive proc)
   (display "primitive")
@@ -627,7 +660,7 @@
     (list 'primitive new-impl)))
   
 (define (drivert-loop)
-  (prompt-for-input input-prompt)
+  (prompt-for-input "T>>>")
   (let ((input (read)))
     (let ((output (eval (transform-top input) the-global-environment)))
       (announce-output output-prompt)
