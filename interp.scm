@@ -50,24 +50,12 @@
 ;;   modifies rnd-table (global hash-table)
 (define (trace-update f)
 (begin
-  (display "trace-func :")
-  (display f)
-  (display "\n")
-
-
-  (display rnd-table)
-  (display "\nBEFORE:  \n")
-  (summarize-rnd)
-
-
   (set-trace-mark)
   (set! likelihood 0)
   (set! likelihood-fresh 0)
   (set! likelihood-stale 0)
 
   (eval f the-global-environment) ; likelihood and random choices are tracked
-  (summarize-rnd)
-  (define count 0)
   (hash-table/for-each rnd-table (lambda (addr rnd)
      (if (eq? (get-current-trace) (rnd-mark rnd))
 	 (list)
@@ -76,19 +64,12 @@
 		(type (rnd-type rnd))
 		(ll (get-ll type x params)))
 	   (set! likelihood-stale (+ likelihood-stale ll))
-       (set! count (+ count 1))
 	   (hash-table/remove! rnd-table addr)))))
-  (display "removed: ")
-  (display count)
-  (display "\nAFTER:   \n")
-  (summarize-rnd)
-  (display "\n &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n")
   rnd-table))
 
 (define (mh-loop exp iters)
-    (display iters)
     (if (eq? iters 0)
-         (display "DONE")
+	(summarize-rnd)
 
 	(let* ((addrs (hash-table/key-list rnd-table))
            (ll-old likelihood)
@@ -108,11 +89,6 @@
 	       (old-table (rnd-table-cpy rnd-table))
 	       (_ (hash-table/put! rnd-table name-r
 		    (make-rnd type-db val-sample params-db l (get-current-trace))))
-           (_ (display "proposal: "))
-           (_ (display name-r))
-           (_ (display ": "))
-           (_ (display val-sample))
-           (_ (display "\n"))
 	       (table (trace-update exp))
 	       (l- likelihood)
 	       (l-fresh likelihood-fresh)
@@ -125,7 +101,6 @@
         (if (< (log (flo:random-unit *random-state*)) alpha)
 		    (set! likelihood l-)  ;; accept
             (set! rnd-table old-table)) ;; reject
-        (display iters)
         (mh-loop exp (- iters 1)))))
 
 
@@ -237,14 +212,10 @@
 
 
 (define (lookup-erp-value addr type . params)
- (display "LOOKUP-ERP-VALUE\n")
  (let ((rnd (hash-table/get rnd-table addr 'nil)))
     (if (and (not (eq? rnd 'nil)) (eq? type (rnd-type rnd)))
 	(let ((val (rnd-val rnd)))
-      (display "MARKS: ")
-      (display (rnd-mark (hash-table/get rnd-table addr 'nil)))
 	  (set-rnd-mark! rnd (get-current-trace)) ; mark choice as active
-      (display (rnd-mark (hash-table/get rnd-table addr 'nil)))
 	  (if (equal? params (rnd-params rnd))
 	      (begin (set! likelihood (+ likelihood (rnd-ll rnd)))
 		     val)
