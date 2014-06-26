@@ -9,11 +9,13 @@
 
 (define (summarize-rnd) (begin 
     (display "\n")
+    (display current-trace)
+    (display "\n")
     (hash-table/for-each rnd-table (lambda (addr rnd)
 	   (display-rnd-addr addr))) 
     (display "ll: ") (display likelihood)
     (display "\nll-fresh: ") (display likelihood-fresh)
-    (display "\nll-stale:") (display likelihood-stale) (list)))
+    (display "\nll-stale:") (display likelihood-stale) (list) (display "\n")))
 
 
 ;; display the current type, value, parameters, likelihood
@@ -27,69 +29,111 @@
 	       (display "  val:") (display (rnd-val rnd))
 	       (display "  param:") (display (rnd-params rnd))
 	       (display "  ll:") (display (rnd-ll rnd))
+           (display " mark: ") (display (rnd-mark rnd))
 	       (display "\n")
 	       rnd))))
-    
+
+
+(define (set-trace-mark) 
+    (set! current-trace
+    (string->symbol (symbol->string (generate-uninterned-symbol "t"))))
+    current-trace)
+
+(define (get-current-trace) current-trace)
+
 
 
 ;; MCMC (Metropolis-Hastings) implementation
 
 ;; trace-update runs f, keeping track of likelihoods
 ;;   f: (transformed) probabilistic program that takes no parameters
-;;   table: table mapping random choice names to values, likelihoods, etc
-(define (trace-update f table)
-  (set! current-trace (generate-uninterned-symbol "t"))
+;;   modifies rnd-table (global hash-table)
+(define (trace-update f)
+(begin
+  (display "trace-func :")
+  (display f)
+  (display "\n")
+
+
+  (display rnd-table)
+  (display "\nBEFORE:  \n")
+  (summarize-rnd)
+
+
+  (set-trace-mark)
   (set! likelihood 0)
   (set! likelihood-fresh 0)
   (set! likelihood-stale 0)
 
   (eval f the-global-environment) ; likelihood and random choices are tracked
-  (hash-table/for-each table (lambda (addr rnd)
-     (if (eq? current-trace (rnd-mark rnd))
+  (summarize-rnd)
+  (define count 0)
+  (hash-table/for-each rnd-table (lambda (addr rnd)
+     (if (eq? (get-current-trace) (rnd-mark rnd))
 	 (list)
 	 (let* ((x (rnd-val rnd))
 		(params (rnd-params rnd))
 		(type (rnd-type rnd))
 		(ll (get-ll type x params)))
 	   (set! likelihood-stale (+ likelihood-stale ll))
-	   (hash-table/remove! table addr)))))
-  table)
+       (set! count (+ count 1))
+	   (hash-table/remove! rnd-table addr)))))
+  (display "removed: ")
+  (display count)
+  (display "\nAFTER:   \n")
+  (summarize-rnd)
+  (display "\n &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n")
+  rnd-table))
 
-(define (mh-loop iters)
+(define (mh-loop exp iters)
+    (display iters)
     (if (eq? iters 0)
-	(display "DONE")
+         (display "DONE")
+
 	(let* ((addrs (hash-table/key-list rnd-table))
-	       (r (random (length (addrs))))
-	       (name-r (list-ref addrs r)) ; random choice name
-	       (choice-r (hash-table/get erp-table name-r)) ; corresponding rnd 
-	       (type-db (erp-type choice-r))
-	       (val-db (erp-val choice-r)) 
-	       (params-db (erp-params choice-r))
+           (ll-old likelihood)
+           ; choose a random name from the database, if empty, use the first choice.
+           (name-r (list-ref addrs (random (length addrs))))
+	       (choice-r (hash-table/get rnd-table name-r 'nil)) ; corresponding rnd 
+	       (type-db (rnd-type choice-r))
+	       (val-db (rnd-val choice-r)) 
+	       (params-db (rnd-params choice-r))
 
 	       ; sample from proposal disribution
-	       (val-sample (get-kernel-sample type-db params-db)) 
+	       (val-sample (get-kernel-sample type-db params-db val-db)) 
 	       (F (get-kernel-prob type-db val-sample params-db))
 	       (R (get-kernel-prob type-db val-db params-db))
 	       (l (get-ll type-db val-sample params-db))
 
-	       (new-table (rnd-table-cpy rnd-table))
-	       (_ (hash_table/put! new-table name-r
-				   (make-rnd type-db val-sample l params-db)))
-	       (new-table (trace-update f new-table))
+	       (old-table (rnd-table-cpy rnd-table))
+	       (_ (hash-table/put! rnd-table name-r
+		    (make-rnd type-db val-sample params-db l (get-current-trace))))
+           (_ (display "proposal: "))
+           (_ (display name-r))
+           (_ (display ": "))
+           (_ (display val-sample))
+           (_ (display "\n"))
+	       (table (trace-update exp))
 	       (l- likelihood)
 	       (l-fresh likelihood-fresh)
 	       (l-stale likelihood-stale)
-	       (alpha .3)) ; TODO
-	  (if (< (log (flo:random-unit *random-state*)) alpha)
-	      (begin (set! rnd-table new-table) ; accept
-		     (set! likelihood l-))))))
+	       (alpha (- 
+		       (+ likelihood R 
+			  (log (hash-table/count old-table)) likelihood-stale) 
+		       ll-old F
+		       (log (hash-table/count rnd-table)) likelihood-fresh)))
+        (if (< (log (flo:random-unit *random-state*)) alpha)
+		    (set! likelihood l-)  ;; accept
+            (set! rnd-table old-table)) ;; reject
+        (display iters)
+        (mh-loop exp (- iters 1)))))
 
 
 
-(define (mh-sample f iters)
+(define (mh-sample exp iters)
   (hash-table/clear! rnd-table)
-  (set! rnd-table (trace-update f rnd-table))
-  (mh-loop iters))
+  (set! rnd-table (trace-update exp))
+  (mh-loop exp iters))
   	  
 ;; database of random choices
 ;; implemented as a hashtable from lists of symbols to rndm structures
@@ -112,7 +156,7 @@
 (define (rnd-table-cpy table)
   (let ((new-table (make-equal-hash-table)))
     (hash-table/for-each table (lambda (addr rnd)
-	(hash-table/put! new-table addr (rnd-copy rnd)))) 
+	(hash-table/put! new-table addr (copy-rnd rnd)))) 
     new-table))
 
 
@@ -126,21 +170,32 @@
 	 (eq? x 0) (flip-ll false p)
 	 (else (error "unsuppored value -- bernoulli-ll")))))
 (define (bernoulli-kernel-sample theta . state)
-  (apply-in-underlying-scheme bernoulli theta))
+  (apply-in-underlying-scheme bernoulli (list theta)))
 (define (bernoulli-kernel-p x theta . state)
   (bernoulli-ll x theta))
 (define (church-bernoulli addr p) (lookup-erp-value addr 'bernoulli p))
 
 
-(define (flip p) (< p (flo:random-unit *random-state*)))
+(define (flip p) (> p (flo:random-unit *random-state*)))
 (define (flip-ll x p)
   (let ((k (if x 1 0)))
     (log (* (expt p k) (expt (- 1 p) (- 1 k))))))
 (define (flip-kernel-sample theta . state)
-  (apply-in-underlying-scheme flip theta))
+      (apply-in-underlying-scheme flip (list theta)))
 (define (flip-kernel-p x theta . state)
   (flip-ll x theta))
 (define (church-flip addr p) (lookup-erp-value addr 'flip p))
+
+; TODO: switch to inverse transform for generating
+(define (geometric p) 
+  (define (geometric-acc p k) (if (flip p) k (geometric-acc p (+ k 1))))
+  (geometric-acc p 0))
+(define (geometric-ll k p) (* p (expt (- 1 p) k)))
+(define (geometric-kernel-sample p . state)
+  (apply-in-underlying-scheme geometric (list p)))
+(define (geometric-kernel-p k p . state)
+  (geometric-ll k p))
+(define (church-geometric addr p) (lookup-erp-value addr 'geometric p))
 
 
 
@@ -157,6 +212,8 @@
 					   flip-kernel-sample flip-kernel-p))
 (hash-table/put! erp-table 'bernoulli (make-erp bernoulli bernoulli-ll
 	    bernoulli-kernel-sample bernoulli-kernel-p))
+(hash-table/put! erp-table 'geometric (make-erp geometric geometric-ll
+	    geometric-kernel-sample geometric-kernel-p))
 
 ;; sample from P_type(*|params)
 (define (get-sample type params)
@@ -171,39 +228,41 @@
 ;; sample from the proposal kernal 
 (define (get-kernel-sample type params . state)
   (let ((kernel (erp-kernel-sample (hash-table/get erp-table type 'nil))))
-    (apply-in-underlying-scheme kernel params )))
+    (apply-in-underlying-scheme kernel (append params state))))
 
 ;; evaluate proposal probability
 (define (get-kernel-prob type val params . state)
   (let ((kernel (erp-kernel-p (hash-table/get erp-table type 'nil))))
     (apply-in-underlying-scheme kernel val params )))
 
+
 (define (lookup-erp-value addr type . params)
+ (display "LOOKUP-ERP-VALUE\n")
  (let ((rnd (hash-table/get rnd-table addr 'nil)))
     (if (and (not (eq? rnd 'nil)) (eq? type (rnd-type rnd)))
 	(let ((val (rnd-val rnd)))
-	  (set-rnd-mark! rnd current-trace) ; mark choice as active
+      (display "MARKS: ")
+      (display (rnd-mark (hash-table/get rnd-table addr 'nil)))
+	  (set-rnd-mark! rnd (get-current-trace)) ; mark choice as active
+      (display (rnd-mark (hash-table/get rnd-table addr 'nil)))
 	  (if (equal? params (rnd-params rnd))
 	      (begin (set! likelihood (+ likelihood (rnd-ll rnd)))
 		     val)
 	      ; else parameters do not match, rescore erp with new parameters
 	      (let* ((l (get-ll type val params))
-		    (new-rnd (make-rnd type val params l current-trace)))
-		(hash-table/put! rnd-table addr new-rnd) 
-		(set! likelihood (+ likelihood l))
-		val)));
+		    (new-rnd (make-rnd type val params l (get-current-trace))))
+            (hash-table/put! rnd-table addr new-rnd) 
+            (set! likelihood (+ likelihood l))
+            val)));
 	; not found in database, need to sample
 	(let* ((val (get-sample type params))
 	       (l (get-ll type val params))
-	       (new-rnd (make-rnd type val params l current-trace)))
+	       (new-rnd (make-rnd type val params l (get-current-trace))))
 	  (hash-table/put! rnd-table addr new-rnd) 
 	  (set! likelihood (+ likelihood l))
 	  (set! likelihood-fresh (+ likelihood-fresh l))
-	  val)))) ; TODO: update likelihood
+	  val)))) 
   
-
-
-
 
 (define (eval exp env)
     ((analyze exp) env))
@@ -588,12 +647,14 @@
 (define primitive-procedures
     (list (list 'flip flip)
 	  (list 'bernoulli bernoulli)
+	  (list 'geometric geometric)
 	  (list 'cons cons)
 	  (list 'car car)
 	  (list 'cdr cdr)
 	  (list '+ +)
 	  (list '- -)
 	  (list '* *)
+	  (list '/ /)
 	  (list '= =)
 	  (list 'list list)
 	  (list 'eq? eq?)
@@ -605,12 +666,14 @@
 (define church-procedures
   (list (list 'church-flip church-flip)
 	(list 'church-bernoulli church-bernoulli)
+	(list 'church-geometric church-geometric)
 	(list 'church-cons (ignore-addr cons))
 	(list 'church-car (ignore-addr car))
 	(list 'church-cdr (ignore-addr cdr))
 	(list 'church-+ (ignore-addr +))
 	(list 'church-- (ignore-addr -))
 	(list 'church-* (ignore-addr *))
+	(list 'church-/ (ignore-addr /))
 	(list 'church-= (ignore-addr =))
 	(list 'church-list? (ignore-addr list?))
 	(list 'church-eq? (ignore-addr eq?))
