@@ -4,7 +4,7 @@ bher-alike
 
 A simple probabilistic programming language in the style of bher, using the "random database"
 approach with Metropolis-Hastings independence sampling. This project is primarily intended
-to be instructive to the author, **is a work in progress**
+to be instructive to the author, **and is a work in progress**
 
 
 Programming languages that include sampling from stochastic sources as elementary procedures
