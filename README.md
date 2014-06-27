@@ -4,7 +4,7 @@ bher-alike
 
 A simple probabilistic programming language in the style of bher, using the "random database"
 approach with Metropolis-Hastings independence sampling. This project is primarily intended
-to be instructive to the author, **is a work in progress**
+to be instructive to the author, **and is a work in progress**
 
 
 Programming languages that include sampling from stochastic sources as elementary procedures
@@ -14,6 +14,11 @@ The point of a probabilistic program is not to execute the program, but rather t
 the conditional distribution defined by assigning values to a subset of the random variables.
 A probabilistic model (the prior) may be specified by writing a program, and samples could automatically 
 be drawn from the conditional posterior. 
+
+
+Primitives include a variety of of familiar scheme procedures: cons, car, cdr, +, etc. as well as 
+elementary random primitives: (flip p), (geometric p). 
+
 
 
 

@@ -34,13 +34,15 @@
 	       rnd))))
 
 
+;; for marking stochastic choices as current, we keep track of a "current" trace symbol
+;; (set-trace-mark) updates the symbol and returns its current value
 (define (set-trace-mark) 
     (set! current-trace
     (string->symbol (symbol->string (generate-uninterned-symbol "t"))))
     current-trace)
 
+;; get the current trace symbol without updating its value
 (define (get-current-trace) current-trace)
-
 
 
 ;; MCMC (Metropolis-Hastings) implementation
@@ -67,13 +69,11 @@
 	   (hash-table/remove! rnd-table addr)))))
   rnd-table))
 
-(define (mh-loop exp iters)
+(define (mh-loop exp cond iters)
     (if (eq? iters 0)
-	(summarize-rnd)
 
 	(let* ((addrs (hash-table/key-list rnd-table))
            (ll-old likelihood)
-           ; choose a random name from the database, if empty, use the first choice.
            (name-r (list-ref addrs (random (length addrs))))
 	       (choice-r (hash-table/get rnd-table name-r 'nil)) ; corresponding rnd 
 	       (type-db (rnd-type choice-r))
@@ -98,17 +98,41 @@
 			  (log (hash-table/count old-table)) likelihood-stale) 
 		       ll-old F
 		       (log (hash-table/count rnd-table)) likelihood-fresh)))
-        (if (< (log (flo:random-unit *random-state*)) alpha)
-		    (set! likelihood l-)  ;; accept
+        (if (and (< (log (flo:random-unit *random-state*)) alpha)
+		 (eval cond the-global-environment))
+	    (set! likelihood l-)  ;; accept
             (set! rnd-table old-table)) ;; reject
-        (mh-loop exp (- iters 1)))))
+        (mh-loop exp cond (- iters 1)))))
 
+;; use rejection sampling to initialize randomness
+;; probably intractable if expr is unlikely
+;; NOTE: cond-exp should already be transformed with addresses.
+(define (init-cond cond-exp)
+  (if (eval cond-exp the-global-environment)
+      rnd-table
+      (begin (hash-table/clear! rnd-table)
+	     (init-cond cond-exp))))
 
+(define (mh-query-general exp cond iters)
+  (hash-table/clear! rnd-table)
+  (let* ((cond-exp `(begin ,exp ,cond))
+	(transformed-exp (transform-top exp))
+	(transformed-cond (transform-top cond-exp)))
+    (init-cond transformed-cond)
+    (if (eq? 0 (hash-table/count rnd-table))
+	()
+	(mh-loop transformed-exp transformed-cond iters))
+    (eval transformed-exp the-global-environment)))
+
+    
 
 (define (mh-sample exp iters)
-  (hash-table/clear! rnd-table)
-  (set! rnd-table (trace-update exp))
-  (mh-loop exp iters))
+  (let ((transformed-exp (transform-top exp)))
+    (hash-table/clear! rnd-table)
+    (set! rnd-table (trace-update exp))
+    (if (eq? 0 (hash-table/count rnd-table))
+	(begin (eval exp the-global-environment))
+	(mh-loop exp 'true iters))))
   	  
 ;; database of random choices
 ;; implemented as a hashtable from lists of symbols to rndm structures
@@ -607,6 +631,8 @@
 			     the-empty-environment)))
     (define-variable! 'true true initial-env)
     (define-variable! 'false false initial-env)
+    (define-variable! 'church-true true initial-env)
+    (define-variable! 'church-false false initial-env)
     initial-env))
 
 (define (primitive-procedure? proc)
@@ -627,6 +653,11 @@
 	  (list '* *)
 	  (list '/ /)
 	  (list '= =)
+	  (list '< <)
+	  (list '> >)
+	  (list '>= >=)
+	  (list '<= <=)
+	  (list 'equal? equal?)
 	  (list 'list list)
 	  (list 'eq? eq?)
 	  (list 'null? null?)))
@@ -646,6 +677,11 @@
 	(list 'church-* (ignore-addr *))
 	(list 'church-/ (ignore-addr /))
 	(list 'church-= (ignore-addr =))
+	(list 'church-< (ignore-addr <))
+	(list 'church-> (ignore-addr >))
+	(list 'church->= (ignore-addr >=))
+	(list 'church-<= (ignore-addr <=))
+	(list 'equal? (ignore-addr equal?))
 	(list 'church-list? (ignore-addr list?))
 	(list 'church-eq? (ignore-addr eq?))
 	(list 'church-null? (ignore-addr null?))))
