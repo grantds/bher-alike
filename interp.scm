@@ -163,18 +163,6 @@
 ;;;;; implementations of random primitives go here ;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define (bernoulli p) (if (flip p) 1 0))
-(define (bernoulli-ll x p)
-  (cond ((eq? x 1) (flip-ll true p)
-	 (eq? x 0) (flip-ll false p)
-	 (else (error "unsuppored value -- bernoulli-ll")))))
-(define (bernoulli-kernel-sample theta . state)
-  (apply-in-underlying-scheme bernoulli (list theta)))
-(define (bernoulli-kernel-p x theta . state)
-  (bernoulli-ll x theta))
-(define (church-bernoulli addr p) (lookup-erp-value addr 'bernoulli p))
-
-
 (define (flip p) (> p (flo:random-unit *random-state*)))
 (define (flip-ll x p)
   (let ((k (if x 1 0)))
@@ -209,8 +197,6 @@
 (define-structure erp sample ll kernel-sample kernel-p)
 (hash-table/put! erp-table 'flip (make-erp flip flip-ll
 					   flip-kernel-sample flip-kernel-p))
-(hash-table/put! erp-table 'bernoulli (make-erp bernoulli bernoulli-ll
-	    bernoulli-kernel-sample bernoulli-kernel-p))
 (hash-table/put! erp-table 'geometric (make-erp geometric geometric-ll
 	    geometric-kernel-sample geometric-kernel-p))
 
@@ -642,8 +628,8 @@
 
 ;; modify (most) primitives to take and ignore an address variable
 (define primitive-procedures
-    (list (list 'flip flip)
-	  (list 'bernoulli bernoulli)
+    (list (list 'mh-query-general mh-query-general)
+          (list 'flip flip)
 	  (list 'geometric geometric)
 	  (list 'cons cons)
 	  (list 'car car)
@@ -667,7 +653,6 @@
 
 (define church-procedures
   (list (list 'church-flip church-flip)
-	(list 'church-bernoulli church-bernoulli)
 	(list 'church-geometric church-geometric)
 	(list 'church-cons (ignore-addr cons))
 	(list 'church-car (ignore-addr car))
@@ -710,8 +695,8 @@
       (apply-in-underlying-scheme (primitive-implementation proc) args))
 
 ;; need a REPL here
-(define input-prompt ";;; M-Eval input:")
-(define output-prompt ";;; M-Eval value:")
+(define input-prompt "bher-alike>>  ")
+(define output-prompt "")
 (define (driver-loop)
  (prompt-for-input input-prompt)
  (let ((input (read)))
@@ -720,10 +705,10 @@
      (user-print output)))
  (driver-loop))
 (define (prompt-for-input string)
-  (newline) (newline) (display string) (newline))
+  (newline) (display string))
 
 (define (announce-output string)
-  (newline) (display string) (newline))
+  (display string) )
 
 (define (user-print object)
   (if (compound-procedure? object)
