@@ -1,4 +1,5 @@
-bher-alike ==========
+bher-alike
+==========
 
 
 A simple probabilistic programming language in the style of bher, using the
