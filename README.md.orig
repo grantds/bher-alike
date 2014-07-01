@@ -1,11 +1,19 @@
+<<<<<<< HEAD
+bher-alike 
+=======
 bher-alike
+>>>>>>> 5f48a401e338a821e01682a17608abb740c0ff11
 ==========
 
 
 A simple probabilistic programming language in the style of bher, using the
 "random database" approach with Metropolis-Hastings independence sampling. This
+<<<<<<< HEAD
+project is primarily intended to be instructive to the author. 
+=======
 project is primarily intended to be instructive to the author.
 
+>>>>>>> 5f48a401e338a821e01682a17608abb740c0ff11
 
 Programming languages that include sampling from stochastic sources as
 elementary procedures (_elementary random procedures_) induce probability
