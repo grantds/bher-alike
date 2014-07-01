@@ -185,6 +185,30 @@
 (define (church-geometric addr p) (lookup-erp-value addr 'geometric p))
 
 
+(define (standard-normal) 
+  (let* ((pi (* 4 (atan 1.0)))
+	 (U (flo:random-unit *random-state*))
+	 (V (flo:random-unit *random-state*))
+	 (X (* (sqrt (* -2 (log U))) (cos (* 2 pi V)))))
+    X))
+
+(define (normal mu sigma-squared)
+  (let* ((Z (standard-normal))
+	 (sigma (sqrt sigma-squared)))
+    (+ mu (* Z sigma))))
+(define (normal-ll x mu sigma-squared)
+  (let ((pi (* 4 (atan 1.0))))
+    (* (/ 1 (sqrt (* sigma-squared 2 pi))) 
+       (exp (- (/ (expt (- x mu) 2) (* 2 sigma-squared)))))))
+(define (normal-kernel-sample mu sigma-squared . state)
+  (apply-in-underlying-scheme normal (list mu sigma-squared)))
+(define (normal-kernel-p x mu sigma-squared . state)
+  (normal-ll x mu sigma-squared))
+(define (church-normal addr mu sigma-squared) 
+  (lookup-erp-value addr 'normal mu sigma-squared))
+	
+
+
 
 ;; table maping erp types to underyling function
 ;; at the moment, you need to declare the erp name as a primitive procedure,
@@ -199,6 +223,8 @@
 					   flip-kernel-sample flip-kernel-p))
 (hash-table/put! erp-table 'geometric (make-erp geometric geometric-ll
 	    geometric-kernel-sample geometric-kernel-p))
+(hash-table/put! erp-table 'normal (make-erp normal normal-ll
+	    normal-kernel-sample normal-kernel-p))
 
 ;; sample from P_type(*|params)
 (define (get-sample type params)
@@ -631,6 +657,7 @@
     (list (list 'mh-query-general mh-query-general)
           (list 'flip flip)
 	  (list 'geometric geometric)
+	  (list 'normal normal)
 	  (list 'cons cons)
 	  (list 'car car)
 	  (list 'cdr cdr)
@@ -654,6 +681,7 @@
 (define church-procedures
   (list (list 'church-flip church-flip)
 	(list 'church-geometric church-geometric)
+	(list 'church-normal church-normal)
 	(list 'church-cons (ignore-addr cons))
 	(list 'church-car (ignore-addr car))
 	(list 'church-cdr (ignore-addr cdr))
