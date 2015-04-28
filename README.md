@@ -4,7 +4,7 @@ bher-alike
 
 A simple probabilistic programming language in the style of bher, using the
 "random database" approach with Metropolis-Hastings independence sampling. This
-project is primarily intended to be instructive to the author. We transform the simple lisp
+project is primarily intended to be instructive to the author, by transforming the simple lisp
 interpreter from SICP into a probabilistic programming language. 
 
 
